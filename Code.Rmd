@@ -1,0 +1,276 @@
+---
+title: "FDA for IR Spectra, revision 6/14/2020"
+output: html_notebook
+---
+
+
+```{r}
+setwd("C:\\Users\\me039583\\OneDrive - University of Central Florida\\projects\\spectrum prediction\\paper\\revision\\newdata")
+#load("sp_nist9.RData")
+n=length(sp.nist9)
+wave.min=min(unlist(lapply(sp.nist9,function(x)min(x[,1]))))
+wave.max=max(unlist(lapply(sp.nist9,function(x)max(x[,1]))))
+
+sp.nist=lapply(sp.nist9,function(x){cbind(x,scaley=scale(x[,2]-min(x[,2]),center=F))})
+abs.min=min(unlist(lapply(sp.nist,function(x)min(x[,3]))))
+abs.max=max(unlist(lapply(sp.nist,function(x)max(x[,3]))))
+```
+
+
+```{r}
+groups=sp.group9
+summary(groups)
+test.ind=NULL
+set.seed(2020)
+for (i in 1:9){test.ind=c(test.ind,sample(which(groups==levels(groups)[i]),round(sum(groups==levels(groups)[i])/5)))}
+train.ind=setdiff(1:n,test.ind)
+train.grp=groups[train.ind]
+test.grp=groups[test.ind]
+#write.csv(finaldata[train.ind,],file="train.csv")
+#write.csv(finaldata[test.ind,],file="test.csv")
+summary(test.grp)
+summary(train.grp)
+```
+
+```{r}
+#library(baseline)
+sp.nist0=sp.nist
+last_abs=unlist(lapply(sp.nist,function(x)max(x[nrow(x),3],x[1,3])))
+baseline.ind=which(last_abs>0.5)
+par(mfrow=c(3,4))
+
+baseline.linear=function(spectdata)
+{
+   np <- nrow(spectdata)
+   if(spectdata[1,1]>spectdata[np,1])spectdata[,2]=spectdata[np:1,2]
+   xmin=which.min(spectdata[,2])
+   ymin=min(spectdata[,2])
+   spectdata[,2]=spectdata[,2]-ymin
+  DF <- data.frame(x = c(xmin,np), y = c(ymin, spectdata[np,2]))
+  fit <- lm(y ~ x, DF)
+  corrected=spectdata[,2]
+  if(xmin<np)corrected=c(spectdata[1:(xmin-1),2],spectdata[xmin:np,2]- predict(fit,newdata = data.frame(x = xmin:np)))
+  if(xmin==1)corrected=spectdata[xmin:np,2]- predict(fit,newdata = data.frame(x = xmin:np))
+   if(spectdata[1,1]>spectdata[np,1])corrected=corrected[np:1]
+  return(corrected)
+}
+for (i in 1:length(baseline.ind))
+{
+  sp.nist0[[baseline.ind[i]]][,3]=baseline.linear( sp.nist[[baseline.ind[i]]][,c(1,3)])
+}
+plot(sp.nist[[561]][,c(1,3)])
+plot(sp.nist0[[561]][,c(1,3)])
+```
+
+
+```{r}
+
+for (j in 1:8)
+{
+  jpeg(paste("..\\plots\\",levels(sp.group9)[j],".jpg",sep=""),width=800,height=600)
+  plot(sp.nist0[[1]]$x,sp.nist0[[1]]$scaley,xlim=c(wave.min,wave.max),ylim=c(0,abs.max),type="n",xlab="wavenumber",ylab="rescaled absorbance",main=levels(sp.group9)[j])
+  for (i in which(sp.group9==levels(sp.group9)[j]))
+  {
+   lines(sp.nist0[[i]][,1],sp.nist0[[i]][,3],col=(i%in%test.ind)+1,main=i)
+  }
+  dev.off()
+}
+
+overlap=vector("list",5)
+overlap[[1]]=c(1,7,8)
+overlap[[2]]=c(2,7,9)
+overlap[[3]]=c(3,6,8,9)
+overlap[[4]]=NA
+overlap[[5]]=c(5,6)
+
+
+for (j in c(1:3,5))
+{
+  jpeg(paste("..\\plots\\",levels(sp.group9)[j],"_overlap0.jpg",sep=""),width=800,height=600)
+  plot(sp.nist0[[1]]$x,sp.nist0[[1]]$scaley,xlim=c(wave.min,wave.max),ylim=c(0,abs.max),type="n",xlab="wavenumber",ylab="rescaled absorbance",main=levels(sp.group9)[j])
+  for (i in which(sp.group9%in%levels(sp.group9)[overlap[[j]]]))
+  {
+    lines(sp.nist0[[i]][,1],sp.nist0[[i]][,3],col=(i%in%test.ind)+1,main=i)
+  }
+  dev.off()
+}
+```
+```{r}
+p=876
+locations=seq(500,4000,length=p)
+data2fdata=function(data2)
+{
+  xdata=data2[,1]
+  ydata=data2[,3]-min(data2[,3])
+  obs=approx(xdata,ydata,xout=locations,yleft=0,yright=0)$y
+  return(obs)
+}
+scale.sp=sapply(sp.nist0,data2fdata)
+library(fda.usc)
+nist.fdata=fdata(t(scale.sp),locations,names=list(main="absorp",xlab="wavenumber",ylab="rescaled absorbance"))
+absorb=nist.fdata$absorp
+train.fdata=nist.fdata[train.ind,]
+test.fdata=nist.fdata[test.ind,]
+
+```
+
+```{r}
+basis.pc=create.pc.basis(train.fdata,l=1:22,lambda=1)
+fpc=fdata2pc(train.fdata,ncomp=50,lambda=1)
+ jpeg("..\\plots\\mean.jpg",width=800,height=600)
+plot(fpc$mean,type="l")
+dev.off()
+ jpeg("..\\plots\\first5pc.jpg",width=800,height=600)
+plot(fpc$rotation[1:5,],type="l",main="First 5 functional principal components",xlab="wavenumber")
+dev.off()
+fpc.score=as.matrix(nist.fdata$data)%*%t(as.matrix(fpc$rotation$data)[1:50,])
+pure.ind=which(sp.group9%in%levels(sp.group9)[1:5])
+
+ jpeg("..\\plots\\pc3d.jpg",width=600,height=450)
+layout(mat = c(1,2),heights = c(0.9,0.1))
+scatterplot3d(fpc.score[pure.ind,c(1,2,4)],color=as.numeric(sp.group9[pure.ind]),pch=16,angle=30,xlab="PC1",ylab="PC2",zlab="PC4")
+#plot(fpc$x[which(train.grp%in%levels(train.grp)[1:5]),1:2],col=as.numeric(train.grp[train.grp%in%levels(train.grp)[1:5]]),pch=16)
+par(mai=c(0,0,0,0))
+plot.new()
+#par(xpd=TRUE)
+legend("top",inset=0,legend=levels(groups)[1:5],col=1:5,pch=19,cex=0.8,horiz=T)
+dev.off()
+ jpeg("..\\plots\\pc12.jpg",width=600,height=450)
+plot(fpc.score[pure.ind,1:2],col=sp.group9[pure.ind],pch=16,xlab="PC1",ylab="PC2")
+dev.off()
+ jpeg("..\\plots\\pc34.jpg",width=600,height=450)
+plot(fpc.score[pure.ind,3:4],col=sp.group9[pure.ind],pch=16,xlab="PC3",ylab="PC4")
+dev.off()
+#par(xpd=FALSE)
+ jpeg("..\\plots\\cum_pc.jpg",width=800,height=600)
+plot(cumsum(fpc$d^2/sum(fpc$d^2))[1:50],type="b",pch=19,cex=0.5,xlab="PCs",ylab="Cumulation Proportion of Variance")
+abline(h=0.8,col="gray")
+dev.off()
+plot(train.fdata[1,])
+lines(fpc$mean+t(as.matrix(fpc$x[1,1:22]))%*%as.matrix(fpc$rotation$data)[1:22,],col=2)
+plot(basis.pc$x,col=train.grp,pch=19)
+legend("topright",levels(groups),col=c(1:3,5,4),pch=19,cex=0.8)
+
+plot(fpc$x[which(train.grp%in%levels(train.grp)[1:5]),1:2],col=as.numeric(train.grp[train.grp%in%levels(train.grp)[1:5]]),pch=16)
+
+```
+```{r}
+amide.train.grp=as.factor(train.grp==levels(train.grp)[1]|train.grp==levels(train.grp)[7]|train.grp==levels(train.grp)[8])
+train.grp1=data.frame(amide.train.grp)
+amide.train=list(df=train.grp1,x=train.fdata)
+amide.glm=fregre.glm(amide.train.grp~x,data=amide.train,basis.x = list("x"=basis.pc),family=binomial())
+#summary(amide.glm)
+amide.test=list(x=test.fdata)
+amide.test.grp=as.factor(test.grp==levels(train.grp)[1]|test.grp==levels(train.grp)[7]|test.grp==levels(train.grp)[8])
+amide.glm.pred=predict(amide.glm,amide.test)
+table(amide.test.grp,amide.glm.pred>=0.5)
+plot(fn<-sapply(seq(0,1,by=0.02),function(x){sum((amide.glm.pred>=x)*(amide.test.grp==F))/sum(amide.glm.pred>=x)}))
+lines(fp<-sapply(seq(0,1,by=0.02),function(x){sum((amide.glm.pred<x)*(amide.test.grp==T))/sum(amide.glm.pred<x)}))
+library(pROC)
+amide_roc=roc(amide.test.grp,amide.glm.pred)
+amide_roc$auc
+plot(amide_roc)
+data.frame(group=test.grp,amide.glm.pred)[amide.test.grp!=(amide.glm.pred>=0.5),]
+```
+```{r}
+aniline.train.grp=as.factor(train.grp==levels(train.grp)[2]|train.grp==levels(train.grp)[7]|train.grp==levels(train.grp)[9])
+train.grp1=data.frame(aniline.train.grp)
+aniline.train=list(df=train.grp1,x=train.fdata)
+aniline.glm=fregre.glm(aniline.train.grp~x,data=aniline.train,basis.x = list("x"=basis.pc),family=binomial())
+#summary(aniline.glm)
+aniline.test=list(x=test.fdata)
+aniline.test.grp=as.factor(test.grp==levels(test.grp)[2]|test.grp==levels(test.grp)[7]|test.grp==levels(test.grp)[9])
+aniline.glm.pred=predict(aniline.glm,aniline.test)
+table(aniline.test.grp,aniline.glm.pred>0.5)
+aniline_roc=roc(aniline.test.grp,aniline.glm.pred)
+aniline_roc$auc
+plot(fn<-sapply(seq(0,1,by=0.02),function(x){sum((aniline.glm.pred>=x)*(aniline.test.grp==F))/sum(aniline.glm.pred>=x)}))
+lines(fp<-sapply(seq(0,1,by=0.02),function(x){sum((aniline.glm.pred<x)*(aniline.test.grp==T))/sum(aniline.glm.pred<x)}),type="b")
+data.frame(group=test.grp,aniline.glm.pred)[aniline.test.grp!=(aniline.glm.pred>=0.5),]
+
+```
+
+```{r}
+bezene.train.grp=as.factor(train.grp==levels(train.grp)[3]|train.grp==levels(train.grp)[6]|train.grp==levels(train.grp)[8]|train.grp==levels(train.grp)[9])
+train.grp1=data.frame(bezene.train.grp)
+bezene.train=list(df=train.grp1,x=train.fdata)
+bezene.glm=fregre.glm(bezene.train.grp~x,data=bezene.train,basis.x = list("x"=basis.pc),family=binomial())
+bezene.test=list(x=test.fdata)
+bezene.test.grp=as.factor(test.grp==levels(test.grp)[3]|test.grp==levels(test.grp)[6]|test.grp==levels(test.grp)[8]|test.grp==levels(test.grp)[9])
+bezene.glm.pred=predict(bezene.glm,bezene.test)
+table(bezene.test.grp,bezene.glm.pred>0.5)
+bezene_roc=roc(bezene.test.grp,bezene.glm.pred)
+bezene_roc$auc
+plot(fn<-sapply(seq(0,1,by=0.02),function(x){sum((bezene.glm.pred>=x)*(bezene.test.grp==F))/sum(bezene.glm.pred>=x)}))
+lines(fp<-sapply(seq(0,1,by=0.02),function(x){sum((bezene.glm.pred<x)*(bezene.test.grp==T))/sum(bezene.glm.pred<x)}))
+data.frame(group=test.grp,bezene.glm.pred)[bezene.test.grp!=(bezene.glm.pred>=0.44),]
+
+```
+
+
+```{r}
+set.seed(1)
+train.piper=c(sample(which(train.grp==levels(train.grp)[5]|train.grp==levels(train.grp)[6]),102,replace=T),
+              sample(which(train.grp!=levels(train.grp)[5]&train.grp!=levels(train.grp)[6]),404,replace=T))
+train.fdata.pip=train.fdata[train.piper,]
+train.grp.pip=train.grp[train.piper]
+piper.train.grp=as.factor(train.grp.pip==levels(train.grp)[5]|train.grp==levels(train.grp)[6])
+train.grp1=data.frame(piper.train.grp)
+piper.train=list(df=train.grp1,x=train.fdata.pip)
+basis.pc1=create.pc.basis(train.fdata.pip,l=1:22)
+piper.glm=fregre.glm(piper.train.grp~x,data=piper.train,basis.x = list("x"=basis.pc1),family=binomial())
+piper.test=list(x=test.fdata)
+piper.test.grp=as.factor(test.grp==levels(test.grp)[5]|test.grp==levels(test.grp)[6])
+piper.glm.pred=predict(piper.glm,piper.test)
+piper_roc=roc(piper.test.grp,piper.glm.pred)
+piper_roc$auc
+table(piper.test.grp,piper.glm.pred>0.5)
+plot(fn<-sapply(seq(0,1,by=0.02),function(x){sum((piper.glm.pred>=x)*(piper.test.grp==F))/sum(piper.glm.pred>=x)}))
+lines(fp<-sapply(seq(0,1,by=0.02),function(x){sum((piper.glm.pred<x)*(piper.test.grp==T))/sum(piper.glm.pred<x)}))
+
+```
+
+```{r}
+jpeg("..//plots//roc.jpg",width=800,height=600,quality=100)
+plot(amide_roc,legacy.axes=T)
+lines(aniline_roc,col=2)
+lines(bezene_roc,col=3)
+lines(piper_roc,col=4)
+#lines(ab_roc,col=5)
+legend("bottomright",c("amide","aniline","benzene","piperidine"),col=1:4,lwd=2,bty="n")
+dev.off()
+rbind(amide_roc$auc,aniline_roc$auc,bezene_roc$auc,piper_roc$auc)
+
+```
+
+
+```{r}
+result=data.frame(amide=amide.glm.pred>=0.5,aniline=aniline.glm.pred>=0.5,benzene=bezene.glm.pred>0.5,piperidine=piper.glm.pred>0.5)
+joint_pred=rep(NA,length(test.grp))
+for (i in 1:126)
+{
+  joint_pred[i]=ifelse(sum(as.numeric(result[i,1:4]))==0,"None",paste(if(result[i,1])"Amide",if(result[i,2])"Aniline",if(result[i,3])"Benzene",if(result[i,4])"Piperidine",sep=""))
+}
+joint=factor(joint_pred,levels=c("Amide","Aniline","Benzene","Piperidine","AmideAniline","AmideBenzene","AnilineBenzene","BenzenePiperidine","None"))
+truth=factor(test.grp,levels=c("amide","aniline","benzene","piperidine","simult_Amide&aniline","simult_Amide&benzene","simult_aniline&benzene","simul_ben_pip","None"))
+joint_result=data.frame(truth=truth,joint,result)
+class_result=table(joint_result[,1:2])
+#write.csv(class_result,file="joint.csv")
+write.csv(joint_result[which(as.numeric(joint_result[,1])!=as.numeric(joint_result[,2])),c(3,1,2)],file="miss1.csv")
+sum(table(joint_result[,1:2]))
+sum(diag(table(joint_result[,1:2])))
+```
+```{r}
+train.grp1=data.frame(train.grp)
+all.train=list(df=train.grp1,x=train.fdata)
+basis.pc1=create.pc.basis(train.fdata,l=1:22,lambda=1)
+#all.glm0=fregre.glm(df~x,data=all.train,basis.x = list("x"=basis.pc1))
+all.glm=classif.glm(train.grp~x,data=all.train,basis.x = list("x"=basis.pc1))
+all.test=list(x=test.fdata)
+all.glm.pred=predict(all.glm,all.test)
+sum(diag(table(test.grp,all.glm.pred)))
+data.frame(names(sp.nist9)[test.ind],test.grp,all.glm.pred)
+result=data.frame(names(sp.nist9)[test.ind],test.grp,all.glm.pred)
+#write.csv(result[which(result[,2]!=result[,3]),],file="miss.csv")
+#multiclass.roc(test.grp,all.glm.pred)
+```
